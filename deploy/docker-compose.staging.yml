@@ -1,0 +1,103 @@
+# Staging: API + Postgres, with docker-compose.edge.yml for HTTPS. Console OTP.
+# Usage (from deploy/):
+#   docker compose -f docker-compose.staging.yml build api
+#   docker compose -f docker-compose.staging.yml up -d postgres
+#   docker compose -f docker-compose.staging.yml --profile tools run --rm migrate
+#   docker compose -f docker-compose.staging.yml exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /opt/dwa/grant-runtime.sql'
+#   docker compose -f docker-compose.staging.yml up -d api
+name: jeayon-work-staging
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+x-api-build: &api-build
+  context: ../server
+  dockerfile: Dockerfile
+services:
+  api:
+    build: *api-build
+    image: jeayon-work-api:staging
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: "8787"
+      TRUST_PROXY_CIDR: 172.30.240.2/32
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN}
+      DATABASE_URL: ${DATABASE_URL:?Set runtime DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      OTP_PEPPER: ${OTP_PEPPER:?Set OTP_PEPPER}
+      RATE_LIMIT_HMAC_SECRET: ${RATE_LIMIT_HMAC_SECRET:?Set RATE_LIMIT_HMAC_SECRET}
+      EMAIL_PROVIDER: console
+      SMS_PROVIDER: console
+      LOG_LEVEL: info
+      OTP_EMAIL_DAILY_CAP: ${OTP_EMAIL_DAILY_CAP:-1000}
+      OTP_SMS_DAILY_CAP: ${OTP_SMS_DAILY_CAP:-500}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      edge:
+        ipv4_address: 172.30.240.3
+      database: {}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *logging
+  postgres:
+    image: postgres:16-bookworm@sha256:d81f7b51697014367236d07ec58b54153fc28f828b72bf247fe5c7487520bcb0
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dwa
+      POSTGRES_USER: dwa_bootstrap
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set independent bootstrap password}
+      MIGRATOR_PASSWORD: ${MIGRATOR_PASSWORD:?Set migrator password}
+      API_DB_PASSWORD: ${API_DB_PASSWORD:?Set runtime database password}
+      BACKUP_DB_PASSWORD: ${BACKUP_DB_PASSWORD:?Set backup database password}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-dwa.sh:ro
+      - ./grant-runtime.sql:/opt/dwa/grant-runtime.sql:ro
+    networks: [database]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+  migrate:
+    profiles: [tools]
+    build: *api-build
+    image: jeayon-work-api:staging
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set separate migrator URL}
+    command: ["node", "dist/db/migrate.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [database]
+    logging: *logging
+volumes:
+  pgdata:
+networks:
+  edge:
+    name: jeayon-work-staging_edge
+    ipam:
+      config:
+        - subnet: 172.30.240.0/24
+  database:
+    internal: true

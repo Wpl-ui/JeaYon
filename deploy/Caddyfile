@@ -1,0 +1,27 @@
+jeayon.com {
+    encode zstd gzip
+    log {
+        output stdout
+        format json
+    }
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+    }
+    @api path /api /api/*
+    handle @api {
+        # Caddy sets X-Forwarded-For to the connecting client and ignores untrusted inbound XFF.
+        reverse_proxy api:8787
+    }
+    handle /assets/* {
+        root * /srv/app
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+    handle {
+        root * /srv/app
+        header Cache-Control "no-cache"
+        try_files {path} /index.html
+        file_server
+    }
+}

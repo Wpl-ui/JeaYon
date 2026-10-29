@@ -1,0 +1,37 @@
+# Edge: Caddy beside existing staging (API + Postgres). Console OTP. No Tencent SES/SMS.
+# Usage (from deploy/, with staging already up):
+#   docker compose -f docker-compose.edge.yml up -d caddy
+# Joins staging's dedicated edge network. Only this fixed Caddy IP is trusted.
+# Does not touch postgres volume or require TENCENT_* vars.
+name: jeayon-work-staging
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+services:
+  caddy:
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../app/dist:/srv/app:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge:
+        ipv4_address: 172.30.240.2
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+volumes:
+  caddy_data:
+  caddy_config:
+networks:
+  edge:
+    external: true
+    name: jeayon-work-staging_edge
